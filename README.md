@@ -22,7 +22,7 @@ Minimize waste in material cutting operations
 ✏️ Позволява лесно добавяне/редактиране на части
 
 Технологии: Python, Tkinter (GUI), rectpack (оптимизационни алгоритми), Google Sheets API
-
+--
 Защо да го използвате:
 
 Намалява производствените разходи с до 30% чрез минимизиране на отпадъци
@@ -30,3 +30,4 @@ Minimize waste in material cutting operations
 Спестява време при планиране на сложни разрязвания
 
 Интуитивен интерфейс на български език
+![deepseek_mermaid_20250704_fb09db](https://github.com/user-attachments/assets/bbfab7fc-8394-4fa0-a768-a0740f5cf7ea)

@@ -1,14 +1,16 @@
 """
 Tkinter UI logic for the sheet cutting app.
 """
-
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox, Canvas, Frame, Scrollbar
-from typing import List
 from models.part import Part, Placement, Sheet
 from packing.engine import PackingEngine
 from visualization.visualizer import CuttingPlanVisualizer
 from export.google_sheets import GoogleSheetsExporter
+from config import DEFAULT_SHEET_SIZES
+import threading
+import queue
+import time
 
 class SheetCuttingApp:
     def __init__(self, root):
@@ -16,289 +18,301 @@ class SheetCuttingApp:
         self.root.title("Дигитален Трион")
         self.root.geometry("1000x800")
 
-        # Data storage
+        # Configure the grid layout
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(0, weight=1)
+
+        # Create a frame for the sheet size selection
+        self.sheet_size_frame = ttk.LabelFrame(self.root, text="Размер на листа")
+        self.sheet_size_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=10)
+
+        # Create a combobox for sheet size selection
+        self.sheet_size_var = tk.StringVar()
+        self.sheet_size_combobox = ttk.Combobox(self.sheet_size_frame, textvariable=self.sheet_size_var)
+        self.sheet_size_combobox["values"] = list(DEFAULT_SHEET_SIZES.keys())
+        self.sheet_size_combobox.grid(row=0, column=0, padx=5, pady=5)
+        self.sheet_size_combobox.bind("<<ComboboxSelected>>", self.on_sheet_size_selected)
+
+        # Create a button to add a new custom sheet size
+        self.add_sheet_size_button = ttk.Button(self.sheet_size_frame, text="Добави размер", command=self.add_sheet_size)
+        self.add_sheet_size_button.grid(row=0, column=1, padx=5, pady=5)
+
+        # Create a frame for the parts list
+        self.parts_frame = ttk.LabelFrame(self.root, text="Части")
+        self.parts_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
+
+        # Configure the parts frame grid
+        self.parts_frame.columnconfigure(0, weight=1)
+        self.parts_frame.rowconfigure(0, weight=1)
+
+        # Create a treeview for displaying parts
+        self.parts_treeview = ttk.Treeview(self.parts_frame, columns=("width", "height", "quantity"), show="headings")
+        self.parts_treeview.heading("width", text="Ширина")
+        self.parts_treeview.heading("height", text="Височина")
+        self.parts_treeview.heading("quantity", text="Количество")
+        self.parts_treeview.grid(row=0, column=0, sticky="nsew")
+
+        # Create a scrollbar for the parts treeview
+        self.parts_scrollbar = ttk.Scrollbar(self.parts_frame, orient="vertical", command=self.parts_treeview.yview)
+        self.parts_scrollbar.grid(row=0, column=1, sticky="ns")
+        self.parts_treeview.configure(yscrollcommand=self.parts_scrollbar.set)
+
+        # Create a frame for the part details
+        self.part_details_frame = ttk.LabelFrame(self.root, text="Детайли за част")
+        self.part_details_frame.grid(row=2, column=0, sticky="ew", padx=10, pady=10)
+
+        # Create labels and entries for part details
+        ttk.Label(self.part_details_frame, text="Ширина:").grid(row=0, column=0, padx=5, pady=5)
+        self.part_width_var = tk.StringVar()
+        self.part_width_entry = ttk.Entry(self.part_details_frame, textvariable=self.part_width_var)
+        self.part_width_entry.grid(row=0, column=1, padx=5, pady=5)
+
+        ttk.Label(self.part_details_frame, text="Височина:").grid(row=1, column=0, padx=5, pady=5)
+        self.part_height_var = tk.StringVar()
+        self.part_height_entry = ttk.Entry(self.part_details_frame, textvariable=self.part_height_var)
+        self.part_height_entry.grid(row=1, column=1, padx=5, pady=5)
+
+        ttk.Label(self.part_details_frame, text="Количество:").grid(row=2, column=0, padx=5, pady=5)
+        self.part_quantity_var = tk.StringVar()
+        self.part_quantity_entry = ttk.Entry(self.part_details_frame, textvariable=self.part_quantity_var)
+        self.part_quantity_entry.grid(row=2, column=1, padx=5, pady=5)
+
+        # Create buttons for part operations
+        self.add_part_button = ttk.Button(self.part_details_frame, text="Добави част", command=self.add_part)
+        self.add_part_button.grid(row=3, column=0, padx=5, pady=5)
+
+        self.remove_part_button = ttk.Button(self.part_details_frame, text="Премахни част", command=self.remove_part)
+        self.remove_part_button.grid(row=3, column=1, padx=5, pady=5)
+
+        # Create a frame for the cutting plan visualization
+        self.visualization_frame = ttk.LabelFrame(self.root, text="Визуализация на рязането")
+        self.visualization_frame.grid(row=0, column=1, rowspan=3, sticky="nsew", padx=10, pady=10)
+
+        # Configure the visualization frame grid
+        self.visualization_frame.columnconfigure(0, weight=1)
+        self.visualization_frame.rowconfigure(0, weight=1)
+
+        # Create a canvas for the cutting plan visualization
+        self.visualization_canvas = Canvas(self.visualization_frame)
+        self.visualization_canvas.grid(row=0, column=0, sticky="nsew")
+
+        # Create a scrollbar for the visualization canvas
+        self.visualization_scrollbar = Scrollbar(self.visualization_frame, orient="vertical", command=self.visualization_canvas.yview)
+        self.visualization_scrollbar.grid(row=0, column=1, sticky="ns")
+        self.visualization_canvas.configure(yscrollcommand=self.visualization_scrollbar.set)
+
+        # Create a frame for the Google Sheets export
+        self.export_frame = ttk.LabelFrame(self.root, text="Експорт в Google Sheets")
+        self.export_frame.grid(row=3, column=0, sticky="ew", padx=10, pady=10)
+
+        # Create a button to export the cutting plan to Google Sheets
+        self.export_button = ttk.Button(self.export_frame, text="Експортиране", command=self.export_to_google_sheets)
+        self.export_button.grid(row=0, column=0, padx=5, pady=5)
+
+        # Create a status bar
+        self.status_bar = ttk.Label(self.root, text="Добре дошли в приложението за рязане на листове!", relief=tk.SUNKEN, anchor="w")
+        self.status_bar.grid(row=4, column=0, columnspan=2, sticky="ew")
+
+        # Initialize the packing engine and visualizer
+        self.packing_engine = PackingEngine()
+        self.visualizer = CuttingPlanVisualizer(self.visualization_canvas)
+
+        # Initialize the parts and sheet variables
         self.parts = []
-        self.sheets = []
+        self.sheet = None
 
-        # Configuration
-        from config import DEFAULT_SHEET_SIZES
-        self.selected_sheet_sizes = DEFAULT_SHEET_SIZES.copy()
+        # Bind the treeview selection event
+        self.parts_treeview.bind("<<TreeviewSelect>>", self.on_part_selected)
 
-        # Create packing engine
-        self.packing_engine = PackingEngine(self.selected_sheet_sizes)
+        # Update the UI elements
+        self.update_sheet_size_combobox()
+        self.update_parts_treeview()
+        self.update_status_bar()
 
-        # UI setup
-        self.setup_ui()
+    def on_sheet_size_selected(self, event):
+        """
+        Event handler for sheet size selection.
+        """
+        selected_size = self.sheet_size_var.get()
+        if selected_size in DEFAULT_SHEET_SIZES:
+            width, height = DEFAULT_SHEET_SIZES[selected_size]
+            self.sheet = Sheet(width, height)
+            self.visualizer.set_sheet(self.sheet)
+            self.update_status_bar()
 
-        # State variables
-        self.editing_part_id = None
-        self.calc_in_progress = False
+    def add_sheet_size(self):
+        """
+        Add a new custom sheet size.
+        """
+        # Open a dialog to get the custom sheet size from the user
+        dialog = CustomSheetSizeDialog(self.root)
+        self.root.wait_window(dialog.top)
 
-    def setup_ui(self):
-        input_frame = ttk.LabelFrame(self.root, text="Детайли на Части")
-        input_frame.pack(padx=10, pady=10, fill=tk.X)
-
-        fields = ["Означение", "Име", "Материал", "Дебелина", "Ширина", "Височина", "Количество"]
-        self.entries = {}
-        for i, field in enumerate(fields):
-            ttk.Label(input_frame, text=f"{field}:").grid(row=i, column=0, padx=5, pady=2, sticky=tk.W)
-            entry = ttk.Entry(input_frame, width=20)
-            entry.grid(row=i, column=1, padx=5, pady=2)
-            self.entries[field] = entry
-
-        button_row = len(fields)
-        self.add_button = ttk.Button(input_frame, text="Добави Част", command=self.add_part)
-        self.add_button.grid(row=button_row, column=0, pady=5, sticky=tk.W+tk.E)
-
-        self.update_button = ttk.Button(input_frame, text="Актуализирай", command=self.update_part, state=tk.DISABLED)
-        self.update_button.grid(row=button_row, column=1, pady=5, sticky=tk.W+tk.E)
-
-        self.cancel_edit_button = ttk.Button(input_frame, text="Отказ", command=self.cancel_edit, state=tk.DISABLED)
-        self.cancel_edit_button.grid(row=button_row+1, column=0, columnspan=2, pady=5)
-
-        ttk.Button(input_frame, text="Избери Размери на Листове", 
-                  command=self.show_sheet_size_dialog).grid(
-                  row=button_row+2, column=0, columnspan=2, pady=5)
-
-        table_frame = ttk.LabelFrame(self.root, text="Списък на Части")
-        table_frame.pack(padx=10, pady=5, fill=tk.BOTH, expand=True)
-
-        columns = ("ID", "Означение", "Име", "Ширина", "Височина", "Количество")
-        self.parts_tree = ttk.Treeview(
-            table_frame, columns=columns, show="headings", selectmode="browse")
-        for col in columns:
-            self.parts_tree.heading(col, text=col)
-        self.parts_tree.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        self.parts_tree.bind("<<TreeviewSelect>>", self.on_part_select)
-        scrollbar = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=self.parts_tree.yview)
-        self.parts_tree.configure(yscroll=scrollbar.set)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-
-        self.button_frame = ttk.Frame(self.root)
-        self.button_frame.pack(padx=10, pady=10, fill=tk.X)
-        ttk.Button(self.button_frame, text="Експорт към Google Sheets",
-          command=self.export_to_s).pack(side=tk.LEFT, padx=5)
-        ttk.Button(self.button_frame, text="Изчисли План на Разрязване", 
-                  command=self.start_calculation_thread).pack(side=tk.LEFT, padx=5)
-        self.restart_button = ttk.Button(self.button_frame, text="Рестартирай Изчислението",
-                  command=self.restart_calculation, state=tk.DISABLED)
-        self.restart_button.pack(side=tk.LEFT, padx=5)
-        ttk.Button(self.button_frame, text="Изтрий Избраната Част", 
-                  command=self.delete_selected_part).pack(side=tk.LEFT, padx=5)
-        self.edit_button = ttk.Button(self.button_frame, text="Редактирай Избраната Част", 
-                  command=self.edit_selected_part)
-        self.edit_button.pack(side=tk.LEFT, padx=5)
-        self.edit_button.config(state=tk.DISABLED)
-        ttk.Button(self.button_frame, text="Изчисти Всичко", 
-                  command=self.clear_all).pack(side=tk.LEFT, padx=5)
-        self.show_plan_button = ttk.Button(self.button_frame, text="Покажи План на Разрязване",
-                  command=self.show_cutting_plan, state=tk.DISABLED)
-        self.show_plan_button.pack(side=tk.LEFT, padx=5)
-        ttk.Label(self.button_frame, text="Алгоритъм:").pack(side=tk.LEFT, padx=5)
-        self.algo_var = tk.StringVar()
-        self.algo_var.set("AUTO")
+        # If the user provided a valid size, add it to the combobox and select it
+        if dialog.result:
+            size_name, (width, height) = dialog.result
+            DEFAULT_SHEET_SIZES[size_name] = (width, height)
+            self.sheet_size_combobox["values"] = list(DEFAULT_SHEET_SIZES.keys())
+            self.sheet_size_var.set(size_name)
+            self.on_sheet_size_selected(None)
 
     def add_part(self):
-        # Gather part data from entries
+        """
+        Add a new part to the cutting plan.
+        """
         try:
-            part_data = {field: self.entries[field].get() for field in self.entries}
-            part_data["Дебелина"] = float(part_data["Дебелина"])
-            part_data["Ширина"] = float(part_data["Ширина"])
-            part_data["Височина"] = float(part_data["Височина"])
-            part_data["Количество"] = int(part_data["Количество"])
-        except ValueError as e:
-            messagebox.showerror("Грешка", f"Невалидни данни: {e}")
+            width = float(self.part_width_var.get())
+            height = float(self.part_height_var.get())
+            quantity = int(self.part_quantity_var.get())
+            part = Part(width, height, quantity)
+            self.parts.append(part)
+            self.update_parts_treeview()
+            self.update_status_bar()
+        except ValueError:
+            messagebox.showerror("Грешка", "Моля, въведете валидни стойности за частите.")
+
+    def remove_part(self):
+        """
+        Remove the selected part from the cutting plan.
+        """
+        selected_item = self.parts_treeview.selection()
+        if selected_item:
+            part_index = self.parts_treeview.index(selected_item)
+            del self.parts[part_index]
+            self.update_parts_treeview()
+            self.update_status_bar()
+
+    def on_part_selected(self, event):
+        """
+        Event handler for part selection in the treeview.
+        """
+        selected_item = self.parts_treeview.selection()
+        if selected_item:
+            part_index = self.parts_treeview.index(selected_item)
+            part = self.parts[part_index]
+            self.part_width_var.set(part.width)
+            self.part_height_var.set(part.height)
+            self.part_quantity_var.set(part.quantity)
+
+    def export_to_google_sheets(self):
+        """
+        Export the cutting plan to Google Sheets.
+        """
+        if not self.sheet or not self.parts:
+            messagebox.showwarning("Предупреждение", "Моля, добавете лист и части преди експортиране.")
             return
 
-        # Create and add part
-        part = Part(**part_data)
-        self.parts.append(part)
-        self.update_parts_tree()
-        self.clear_entries()
+        # Create a new thread for the export process
+        export_thread = threading.Thread(target=self.run_export_to_google_sheets)
+        export_thread.start()
 
-    def update_part(self):
-        if self.editing_part_id is None:
-            return
-
-        # Gather updated part data from entries
+    def run_export_to_google_sheets(self):
+        """
+        Run the export process in a separate thread.
+        """
         try:
-            part_data = {field: self.entries[field].get() for field in self.entries}
-            part_data["Дебелина"] = float(part_data["Дебелина"])
-            part_data["Ширина"] = float(part_data["Ширина"])
-            part_data["Височина"] = float(part_data["Височина"])
-            part_data["Количество"] = int(part_data["Количество"])
-        except ValueError as e:
-            messagebox.showerror("Грешка", f"Невалидни данни: {e}")
-            return
-
-        # Update part
-        part = self.parts[self.editing_part_id]
-        part.update(**part_data)
-        self.update_parts_tree()
-        self.clear_entries()
-        self.editing_part_id = None
-        self.update_button.config(state=tk.DISABLED)
-        self.cancel_edit_button.config(state=tk.DISABLED)
-
-    def cancel_edit(self):
-        self.clear_entries()
-        self.editing_part_id = None
-        self.update_button.config(state=tk.DISABLED)
-        self.cancel_edit_button.config(state=tk.DISABLED)
-
-    def show_sheet_size_dialog(self):
-        from config import AVAILABLE_SHEET_SIZES
-
-        dialog = tk.Toplevel(self.root)
-        dialog.title("Избор на Размери на Листове")
-        dialog.geometry("400x300")
-
-        label = tk.Label(dialog, text="Изберете размери на листове:")
-        label.pack(pady=10)
-
-        sheet_size_listbox = tk.Listbox(dialog, selectmode=tk.MULTIPLE)
-        for size in AVAILABLE_SHEET_SIZES:
-            sheet_size_listbox.insert(tk.END, f"{size[0]}x{size[1]}")
-        sheet_size_listbox.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
-
-        def on_ok():
-            selected_indices = sheet_size_listbox.curselection()
-            self.selected_sheet_sizes = [AVAILABLE_SHEET_SIZES[i] for i in selected_indices]
-            self.packing_engine = PackingEngine(self.selected_sheet_sizes)  # Recreate engine with new sizes
-            dialog.destroy()
-
-        button_frame = tk.Frame(dialog)
-        button_frame.pack(pady=10)
-        ok_button = tk.Button(button_frame, text="OK", command=on_ok)
-        ok_button.pack(side=tk.LEFT, padx=5)
-        cancel_button = tk.Button(button_frame, text="Отказ", command=dialog.destroy)
-        cancel_button.pack(side=tk.LEFT, padx=5)
-
-        dialog.transient(self.root)
-        dialog.grab_set()
-        self.root.wait_window(dialog)
-
-    def on_part_select(self, event):
-        selected_item = self.parts_tree.selection()
-        if not selected_item:
-            return
-
-        # Get selected part ID
-        part_id = self.parts_tree.item(selected_item, "values")[0]
-        self.editing_part_id = int(part_id) - 1  # Convert to 0-based index
-
-        # Fill entries with part data
-        part = self.parts[self.editing_part_id]
-        for field in self.entries:
-            self.entries[field].delete(0, tk.END)
-            self.entries[field].insert(0, str(getattr(part, field)))
-
-        self.update_button.config(state=tk.NORMAL)
-        self.cancel_edit_button.config(state=tk.NORMAL)
-
-    def delete_selected_part(self):
-        selected_item = self.parts_tree.selection()
-        if not selected_item:
-            return
-
-        part_id = int(self.parts_tree.item(selected_item, "values")[0]) - 1
-        del self.parts[part_id]
-        self.update_parts_tree()
-
-    def edit_selected_part(self):
-        selected_item = self.parts_tree.selection()
-        if not selected_item:
-            return
-
-        part_id = int(self.parts_tree.item(selected_item, "values")[0]) - 1
-        part = self.parts[part_id]
-        self.editing_part_id = part_id
-
-        # Fill entries with part data
-        for field in self.entries:
-            self.entries[field].delete(0, tk.END)
-            self.entries[field].insert(0, str(getattr(part, field)))
-
-        self.update_button.config(state=tk.NORMAL)
-        self.cancel_edit_button.config(state=tk.NORMAL)
-
-    def clear_all(self):
-        self.parts = []
-        self.sheets = []
-        self.update_parts_tree()
-        self.clear_entries()
-
-    def show_cutting_plan(self):
-        if not self.sheets:
-            messagebox.showinfo("Информация", "Няма налични листове за показване на плана.")
-            return
-
-        visualizer = CuttingPlanVisualizer(self.sheets)
-        visualizer.visualize()
-
-    def export_to_s(self):
-        if not self.parts:
-            messagebox.showinfo("Информация", "Няма налични части за експортиране.")
-            return
-
-        exporter = GoogleSheetsExporter(self.parts)
-        exporter.export()
-
-    def start_calculation_thread(self):
-        if self.calc_in_progress:
-            return
-
-        self.calc_in_progress = True
-        self.restart_button.config(state=tk.NORMAL)
-        self.show_plan_button.config(state=tk.DISABLED)
-
-        # Run calculation in a separate thread
-        import threading
-        thread = threading.Thread(target=self.calculate_packing)
-        thread.start()
-
-    def calculate_packing(self):
-        try:
-            # Perform packing calculation
-            self.packing_engine.pack(self.parts)
-
-            # Update sheets and visualize plan
-            self.sheets = self.packing_engine.sheets
-            self.show_cutting_plan()
+            exporter = GoogleSheetsExporter()
+            exporter.export_cutting_plan(self.sheet, self.parts)
+            self.show_export_success_message()
         except Exception as e:
-            messagebox.showerror("Грешка при изчисление", str(e))
-        finally:
-            self.calc_in_progress = False
-            self.restart_button.config(state=tk.DISABLED)
-            self.show_plan_button.config(state=tk.NORMAL)
+            self.show_export_error_message(str(e))
 
-    def restart_calculation(self):
-        if self.calc_in_progress:
-            return
+    def show_export_success_message(self):
+        """
+        Show a success message after exporting to Google Sheets.
+        """
+        self.root.after(0, messagebox.showinfo, "Успех", "Планът за рязане беше експортиран успешно в Google Sheets.")
 
-        self.calc_in_progress = True
-        self.restart_button.config(state=tk.DISABLED)
-        self.show_plan_button.config(state=tk.DISABLED)
+    def show_export_error_message(self, error_message):
+        """
+        Show an error message after a failed export to Google Sheets.
+        """
+        self.root.after(0, messagebox.showerror, "Грешка при експортиране", error_message)
 
-        # Clear previous sheets
-        self.sheets = []
-        self.update_parts_tree()
+    def update_sheet_size_combobox(self):
+        """
+        Update the sheet size combobox values.
+        """
+        self.sheet_size_combobox["values"] = list(DEFAULT_SHEET_SIZES.keys())
+        if self.sheet:
+            size_name = next((name for name, dims in DEFAULT_SHEET_SIZES.items() if dims == (self.sheet.width, self.sheet.height)), None)
+            self.sheet_size_var.set(size_name)
 
-        # Re-run packing calculation
-        self.start_calculation_thread()
+    def update_parts_treeview(self):
+        """
+        Update the parts treeview with the current parts list.
+        """
+        self.parts_treeview.delete(*self.parts_treeview.get_children())
+        for part in self.parts:
+            self.parts_treeview.insert("", "end", values=(part.width, part.height, part.quantity))
 
-    def update_parts_tree(self):
-        # Clear treeview
-        for item in self.parts_tree.get_children():
-            self.parts_tree.delete(item)
+    def update_status_bar(self):
+        """
+        Update the status bar text.
+        """
+        if self.sheet:
+            self.status_bar.config(text=f"Лист: {self.sheet.width}x{self.sheet.height} мм")
+        else:
+            self.status_bar.config(text="Добре дошли в приложението за рязане на листове!")
 
-        # Insert updated parts
-        for i, part in enumerate(self.parts):
-            self.parts_tree.insert("", tk.END, values=(i+1, part.означение, part.име, part.ширина, part.височина, part.количество))
+# Custom dialog class for adding a new sheet size
+class CustomSheetSizeDialog:
+    def __init__(self, parent):
+        self.top = tk.Toplevel(parent)
+        self.top.title("Добавяне на нов размер на листа")
+        self.top.geometry("300x200")
 
-    def clear_entries(self):
-        for entry in self.entries.values():
-            entry.delete(0, tk.END)
-        self.editing_part_id = None
-        self.update_button.config(state=tk.DISABLED)
-        self.cancel_edit_button.config(state=tk.DISABLED)
+        self.result = None
+
+        # Create labels and entries for sheet size
+        ttk.Label(self.top, text="Име на размера:").grid(row=0, column=0, padx=5, pady=5)
+        self.size_name_var = tk.StringVar()
+        self.size_name_entry = ttk.Entry(self.top, textvariable=self.size_name_var)
+        self.size_name_entry.grid(row=0, column=1, padx=5, pady=5)
+
+        ttk.Label(self.top, text="Ширина:").grid(row=1, column=0, padx=5, pady=5)
+        self.width_var = tk.StringVar()
+        self.width_entry = ttk.Entry(self.top, textvariable=self.width_var)
+        self.width_entry.grid(row=1, column=1, padx=5, pady=5)
+
+        ttk.Label(self.top, text="Височина:").grid(row=2, column=0, padx=5, pady=5)
+        self.height_var = tk.StringVar()
+        self.height_entry = ttk.Entry(self.top, textvariable=self.height_var)
+        self.height_entry.grid(row=2, column=1, padx=5, pady=5)
+
+        # Create buttons for dialog actions
+        self.ok_button = ttk.Button(self.top, text="OK", command=self.on_ok)
+        self.ok_button.grid(row=3, column=0, padx=5, pady=5)
+
+        self.cancel_button = ttk.Button(self.top, text="Отказ", command=self.on_cancel)
+        self.cancel_button.grid(row=3, column=1, padx=5, pady=5)
+
+        # Center the dialog on the parent window
+        self.top.transient(parent)
+        self.top.grab_set()
+        parent.wait_window(self.top)
+
+    def on_ok(self):
+        """
+        Handle the OK button click.
+        """
+        size_name = self.size_name_var.get().strip()
+        width = self.width_var.get().strip()
+        height = self.height_var.get().strip()
+
+        if size_name and width and height:
+            try:
+                width = float(width)
+                height = float(height)
+                self.result = (size_name, (width, height))
+                self.top.destroy()
+            except ValueError:
+                messagebox.showerror("Грешка", "Моля, въведете валидни числови стойности за ширина и височина.")
+        else:
+            messagebox.showerror("Грешка", "Моля, попълнете всички полета.")
+
+    def on_cancel(self):
+        """
+        Handle the Cancel button click.
+        """
+        self.top.destroy()

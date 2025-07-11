@@ -1,16 +1,13 @@
 """
 Packing engine and optimization logic for the sheet cutting app.
 """
-
-import math
-import time
-import traceback
 from rectpack import newPacker
 from rectpack.maxrects import MaxRectsBaf, MaxRectsBl
 from rectpack.skyline import SkylineMwf, SkylineBlWm
 from rectpack.guillotine import GuillotineBafSas
 from typing import List, Callable, Dict, Any
 from models.part import Part, Placement, Sheet
+from config import DEFAULT_SHEET_SIZES
 
 ALGORITHMS = [
     (MaxRectsBaf, "MaxRects Best-Area-Fit"),
@@ -37,6 +34,8 @@ class PackingEngine:
             total_parts = sum(p.qty for p in parts)
             processed_parts = 0
             progress_callback(("Започва изчислението...", 0))
+            import math
+            import time
             start_time = time.time()
             for group_key, group_parts in groups.items():
                 material, thickness = group_key
@@ -167,13 +166,24 @@ class PackingEngine:
                         sheet_area = sheet_w * sheet_h
                         waste_percent = (sheet_area - used_area) / sheet_area * 100
                         if waste_percent > 15:
+                            placements_dicts = [p.to_dict() if hasattr(p, 'to_dict') else p for p in placements]
                             optimized_placements = self.optimize_sheet(
-                                [p.to_dict() for p in placements], 
-                                sheet_w, 
+                                placements_dicts,
+                                sheet_w,
                                 sheet_h
                             )
                             if optimized_placements:
-                                placements = [Placement(**p) for p in optimized_placements]
+                                placements = [
+                                    Placement(
+                                        placement['part_id'],
+                                        placement['ref'],
+                                        placement['x'],
+                                        placement['y'],
+                                        placement['rotated'],
+                                        placement['width'],
+                                        placement['height'],
+                                        {}) for placement in optimized_placements
+                                ]
                                 used_area = sum(p['width'] * p['height'] for p in optimized_placements)
                                 waste_percent = (sheet_area - used_area) / sheet_area * 100
                         sheet_data['placements'] = placements
@@ -203,6 +213,7 @@ class PackingEngine:
             sheets = self.global_optimization(sheets)
             return sheets
         except Exception as e:
+            import traceback
             traceback.print_exc()
             progress_callback((f"Грешка: {str(e)}", 100))
             return None
@@ -210,6 +221,7 @@ class PackingEngine:
     def global_optimization(self, sheets: List[Sheet]):
         if not sheets:
             return sheets
+        import math
         all_parts = []
         for sheet in sheets:
             all_parts.extend(sheet.placements)
@@ -305,24 +317,23 @@ class PackingEngine:
             placed_positions = []
             for part in parts:
                 placed = False
-                if not placed:
-                    for x in range(0, sheet_w - int(part['width']), 10):
-                        for y in range(0, sheet_h - int(part['height']), 10):
-                            if self.can_place(part, x, y, placed_positions):
-                                optimized_placements.append({
-                                    'part_id': part['part_id'],
-                                    'ref': part['ref'],
-                                    'x': x,
-                                    'y': y,
-                                    'width': part['width'],
-                                    'height': part['height'],
-                                    'rotated': False
-                                })
-                                placed_positions.append((x, y, x + part['width'], y + part['height']))
-                                placed = True
-                                break
-                        if placed:
+                for x in range(0, sheet_w - int(part['width']), 10):
+                    for y in range(0, sheet_h - int(part['height']), 10):
+                        if self.can_place(part, x, y, placed_positions):
+                            optimized_placements.append({
+                                'part_id': part['part_id'],
+                                'ref': part['ref'],
+                                'x': x,
+                                'y': y,
+                                'width': part['width'],
+                                'height': part['height'],
+                                'rotated': False
+                            })
+                            placed_positions.append((x, y, x + part['width'], y + part['height']))
+                            placed = True
                             break
+                    if placed:
+                        break
                 if not placed and part['width'] != part['height']:
                     for x in range(0, sheet_w - int(part['height']), 10):
                         for y in range(0, sheet_h - int(part['width']), 10):

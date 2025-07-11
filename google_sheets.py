@@ -1,15 +1,12 @@
 """
 Google Sheets export logic for the sheet cutting app.
 """
-
-import os
-import time
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from typing import List, Optional
 from models.part import Sheet
-
-GOOGLE_SHEET_ID = os.environ.get('GOOGLE_SHEET_ID', None)
+import time
+import os
 
 class GoogleSheetsExporter:
     def __init__(self, service_account_file: str):
@@ -34,60 +31,37 @@ class GoogleSheetsExporter:
         if not self.authenticate():
             return False
         try:
-            spreadsheet_id = GOOGLE_SHEET_ID
-            if not spreadsheet_id:
-                if filename is None:
-                    filename = "Cutting_Plan_Master"
-                spreadsheet = {
-                    'properties': {
-                        'title': filename
+            if filename is None:
+                filename = "Cutting_Plan_" + time.strftime("%d-%m-%Y")
+            spreadsheet = {
+                'properties': {
+                    'title': filename
+                }
+            }
+            spreadsheet = self.service.spreadsheets().create(body=spreadsheet).execute()
+            spreadsheet_id = spreadsheet['spreadsheetId']
+            first_sheet_id = spreadsheet['sheets'][0]['properties']['sheetId']
+            current_date = time.strftime("%d-%m-%Y")
+            requests = [
+                {
+                    "updateSheetProperties": {
+                        "properties": {
+                            "sheetId": first_sheet_id,
+                            "title": current_date
+                        },
+                        "fields": "title"
                     }
                 }
-                spreadsheet = self.service.spreadsheets().create(body=spreadsheet).execute()
-                spreadsheet_id = spreadsheet['spreadsheetId']
-                print(f"Created new Google Sheet. Set GOOGLE_SHEET_ID to: {spreadsheet_id}")
-                # Grant edit permission to a user (email hidden for privacy)
-                try:
-                    drive_service = build('drive', 'v3', credentials=self.credentials)
-                    permission = {
-                        'type': 'user',
-                        'role': 'writer',
-                        'emailAddress': os.environ.get('EXPORT_SHARE_EMAIL')  # Set this in your environment
-                    }
-                    if permission['emailAddress']:
-                        drive_service.permissions().create(
-                            fileId=spreadsheet_id,
-                            body=permission,
-                            fields='id',
-                            sendNotificationEmail=False
-                        ).execute()
-                        print("Granted edit permission to the configured email.")
-                    else:
-                        print("No export share email configured. Skipping permission grant.")
-                except Exception:
-                    print("Failed to grant permission (details hidden for privacy).")
-            current_date = time.strftime("%Y-%m-%d_%H-%M-%S")
-            add_sheet_request = {
-                'requests': [
-                    {
-                        'addSheet': {
-                            'properties': {
-                                'title': current_date
-                            }
-                        }
-                    }
-                ]
-            }
-            response = self.service.spreadsheets().batchUpdate(
+            ]
+            self.service.spreadsheets().batchUpdate(
                 spreadsheetId=spreadsheet_id,
-                body=add_sheet_request
+                body={'requests': requests}
             ).execute()
-            new_sheet_id = response['replies'][0]['addSheet']['properties']['sheetId']
             sheet_details = []
             for i, sheet in enumerate(sheets, 1):
                 sheet_details.append([
-                    f"Sheet {i}",
-                    f"{sheet.size[0]}x{sheet.size[1]}",
+                    f"Sheet {i}", 
+                    f"{sheet.size[0]}x{sheet.size[1]}",  
                     sheet.material,
                     str(sheet.thickness),
                     f"{sheet.utilization*100:.2f}%",
@@ -111,8 +85,8 @@ class GoogleSheetsExporter:
                     ])
             sheet_body = {
                 'values': [
-                    ["Sheet #", "Dimensions (mm)", "Material", "Thickness (mm)",
-                     "Utilization", "Waste %", "Part Count", "Algorithm"],
+                    ["Лист#", "Dimensions (mm)", "Материал", "Дебелина (mm)", 
+                     "Ефективност", "Отпадък %", "Брой части", "Алгоритъм"],
                     *sheet_details
                 ]
             }
@@ -124,8 +98,8 @@ class GoogleSheetsExporter:
             ).execute()
             placement_body = {
                 'values': [
-                    ["Sheet #", "Part Ref", "Width (mm)", "Height (mm)", "Orientation",
-                     "X Position", "Y Position", "Material", "Thickness (mm)"],
+                    ["Лист #", "Part Ref", "Широчина (mm)", "Височина (mm)", "Ориентация", 
+                     "X Position", "Y Position", "Материал", "Дебелина (mm)"],
                     *placement_details
                 ]
             }
@@ -144,7 +118,7 @@ class GoogleSheetsExporter:
                     {
                         "repeatCell": {
                             "range": {
-                                "sheetId": new_sheet_id,
+                                "sheetId": first_sheet_id,
                                 "startRowIndex": 0,
                                 "endRowIndex": 1
                             },
@@ -155,7 +129,7 @@ class GoogleSheetsExporter:
                     {
                         "repeatCell": {
                             "range": {
-                                "sheetId": new_sheet_id,
+                                "sheetId": first_sheet_id,
                                 "startRowIndex": len(sheet_details) + 2,
                                 "endRowIndex": len(sheet_details) + 3
                             },
@@ -167,7 +141,7 @@ class GoogleSheetsExporter:
                         "autoResizeDimensions": {
                             "dimensions": {
                                 "dimension": "COLUMNS",
-                                "sheetId": new_sheet_id
+                                "sheetId": first_sheet_id
                             }
                         }
                     }
@@ -177,7 +151,19 @@ class GoogleSheetsExporter:
                 spreadsheetId=spreadsheet_id,
                 body=format_request
             ).execute()
-            print(f"Google Sheets export complete. Link: https://docs.google.com/spreadsheets/d/{spreadsheet_id}")
+            try:
+                drive_service = build('drive', 'v3', credentials=self.credentials)
+                permission = {
+                    'type': 'anyone',
+                    'role': 'writer',
+                }
+                drive_service.permissions().create(
+                    fileId=spreadsheet_id,
+                    body=permission,
+                    fields='id',
+                ).execute()
+            except Exception as e:
+                print(f"Failed to set public permission: {e}")
             return spreadsheet_id
         except Exception as e:
             print(f"Export failed: {e}")

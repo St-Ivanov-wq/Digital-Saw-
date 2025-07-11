@@ -1,0 +1,2 @@
+
+This project is a modular Tkinter-based sheet cutting optimization app. Please keep code modular, readable, and use imports between modules. All UI logic should go in ui/app_ui.py, data models in models/part.py, packing logic in packing/engine.py, visualization in visualization/visualizer.py, and Google Sheets export in export/google_sheets.py. Constants should be in config.py. Entry point is main.py.

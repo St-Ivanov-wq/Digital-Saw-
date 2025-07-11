@@ -18,12 +18,13 @@ A Tkinter-based desktop application for optimizing sheet cutting, visualizing re
 - `config.py` — Constants and configuration
 
 ## Setup
-1. Install dependencies:
+1. Make sure you have Python 3.8 or newer installed.
+2. Open a terminal in the project directory and run:
+   ```sh
+   pip install -r requirements.txt
    ```
-pip install -r requirements.txt
-   ```
-2. Set up your Google service account and place the JSON key in the project directory.
-3. (Optional) Set the `GOOGLE_SHEET_ID` environment variable to use an existing Google Sheet.
+3. Set up your Google service account and place the JSON key (e.g., ss_service_account.json) in the project directory for Google Sheets export/import.
+4. (Optional) Set the `GOOGLE_SHEET_ID` environment variable to use an existing Google Sheet.
 
 ## Usage
 Run the app:
